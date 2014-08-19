@@ -1,0 +1,512 @@
+package main
+
+import (
+    _ "code.google.com/p/odbc"
+    "database/sql"
+    //    _ "github.com/mattn/go-sqlite3"
+    "bitbucket.org/d2r2/go_avaya_cc_reports/sqlg"
+    "fmt"
+    _ "github.com/mxk/go-sqlite/sqlite3"
+    "log"
+    "time"
+)
+
+type DbConnSpec struct {
+    Server   string
+    Port     int
+    Database string
+    User     string
+    Password string
+}
+
+func getPostgreSqlConnSettings(conn *DbConnSpec) (string, string) {
+    driverName := "odbc"
+    dataSource := fmt.Sprintf("driver=postgresql;server=%s;database=%s;"+
+        "sslmode=disable;uid=%s", conn.Server, conn.Database,
+        conn.User)
+    return driverName, dataSource
+}
+
+func getMySqlConnSettings(conn *DbConnSpec) (string, string) {
+    driverName := "odbc"
+    dataSource := fmt.Sprintf("driver=mysql;server=%s;database=%s;"+
+        "sslmode=disable;uid=%s", conn.Server, conn.Database,
+        conn.User)
+    return driverName, dataSource
+}
+
+func getMicrosoftSqlConnSettings(conn *DbConnSpec) (string, string) {
+    driverName := "odbc"
+    dataSource := fmt.Sprintf("driver=freetds;server=%s;port=%d;"+
+        "database=%s;uid=%s", conn.Server, conn.Port,
+        conn.Database, conn.User)
+    if conn.Password != "" {
+        dataSource += fmt.Sprintf(";pwd=%s", conn.Password)
+    }
+    return driverName, dataSource
+}
+
+func getSqliteConnSettings(conn *DbConnSpec) (string, string) {
+    driverName := "sqlite3"
+    dataSource := fmt.Sprintf("%s", conn.Database)
+    return driverName, dataSource
+}
+
+func openConnection(dialect sqlg.SqlDialect, dbname *string) (*sql.DB, error) {
+    var driverName, dataSource string
+    switch dialect {
+    case sqlg.SD_PGSQL:
+        driverName, dataSource = getPostgreSqlConnSettings(&DbConnSpec{
+            Server: "127.0.0.1", Database: *dbname, User: "ddyakov"})
+    case sqlg.SD_MSTSQL:
+        driverName, dataSource = getMicrosoftSqlConnSettings(&DbConnSpec{
+            Server: "wakobpfin11", Port: 1433, Database: *dbname,
+            User: "sa", Password: "Quinta-45"})
+    case sqlg.SD_MYSQL:
+        driverName, dataSource = getMySqlConnSettings(&DbConnSpec{
+            Server: "127.0.0.1", Database: *dbname, User: "root"})
+    case sqlg.SD_SQLITE:
+        driverName, dataSource = getSqliteConnSettings(&DbConnSpec{
+            Database: "./foo.db"})
+    default:
+        return nil, fmt.Errorf("Can't find connection specification for %v", dialect)
+    }
+    conn, err := sql.Open(driverName, dataSource)
+    return conn, err
+}
+
+func createDatabase(db *sql.DB, dbdef *sqlg.DatabaseDef,
+    format *sqlg.SqlFormatOptions) error {
+    batch, err := sqlg.Predefined.CheckIfDatabaseExists(
+        format.Dialect, dbdef.Name)
+    if err != nil {
+        return err
+    }
+    row, err := batch.ExecQueryRow(db)
+    if err != nil {
+        return err
+    }
+    var dbcount int
+    err = row.Scan(&dbcount)
+    if err != nil {
+        return err
+    }
+    if dbcount == 0 {
+        batch, err = dbdef.CreateDatabase().GetSql(format)
+        if err != nil {
+            return err
+        }
+        _, err := batch.Exec(db)
+        if err != nil {
+            return err
+        }
+        err = nil
+    }
+    return err
+}
+
+func createDatabaseDef(dbName string) *sqlg.DatabaseDef {
+    // build database
+    dbDef := sqlg.NewDatabase(dbName)
+    ef := dbDef.ExprFactory()
+    // build table
+    custs := dbDef.AddTable("Customers")
+    /*fldId := */ custs.Fields.AddAutoinc("Id")
+    custs.Fields.AddUnicodeVariable("FirstName", 50).NotNull()
+    custs.Fields.AddUnicodeVariable("LastName", 50).NotNull()
+    custs.Fields.AddDate("BirthDate").NotNull().DefaultValue(time.Date(1974, 10, 15, 0, 0, 0, 0, time.UTC))
+    custs.Fields.AddDateTime("ReferenceDate").DefaultValue(ef.CurrentDateTime())
+    custs.Indexes.AddIndex("IX_1", custs.GetField("LastName"))
+    //    cust.PrimaryKey.Name = "PK_1"
+    //    custs.PrimaryKey.AddField(fldId)
+    prods := dbDef.AddTable("Products")
+    /*fldId = */ prods.Fields.AddAutoinc("Id")
+    prods.Fields.AddUnicodeVariable("Descr", 100).NotNull()
+    //    prods.Fields.AddNumeric("Price", false, 18, 2)
+    prods.Fields.AddReal("Price").NotNull().DefaultValue(0)
+    prods.Fields.AddDateTime("ReferenceDate").DefaultValue(ef.CurrentDateTime())
+    //    prods.PrimaryKey.AddField(fldId)
+    ords := dbDef.AddTable("Orders")
+    /*fldId = */ ords.Fields.AddAutoinc("Id")
+    ords.Fields.AddDate("OrderDate").NotNull()
+    ords.Fields.AddInt("CustId").NotNull()
+    ords.Fields.AddUnicodeVariable("Descr", 100)
+    //    ords.PrimaryKey.AddField(fldId)
+    dtls := dbDef.AddTable("OrderDetails")
+    /*fldId := */ dtls.Fields.AddAutoinc("Id")
+    dtls.Fields.AddInt("OrderId").NotNull()
+    dtls.Fields.AddUnicodeVariable("ItemName", 50).NotNull()
+    dtls.Fields.AddInt("Quantity").NotNull()
+    //    dtls.PrimaryKey.AddField(fldId)
+    return dbDef
+}
+
+func getTables(dbDef *sqlg.DatabaseDef) (*sqlg.TableDef,
+    *sqlg.TableDef, *sqlg.TableDef, *sqlg.TableDef, error) {
+    custs, err := dbDef.GetTable("Customers")
+    if err != nil {
+        return nil, nil, nil, nil, err
+    }
+    prods, err := dbDef.GetTable("Products")
+    if err != nil {
+        return nil, nil, nil, nil, err
+    }
+    ords, err := dbDef.GetTable("Orders")
+    if err != nil {
+        return nil, nil, nil, nil, err
+    }
+    dtls, err := dbDef.GetTable("OrderDetails")
+    if err != nil {
+        return nil, nil, nil, nil, err
+    }
+    return custs, prods, ords, dtls, nil
+}
+
+func dropTables(db *sql.DB, dbDef *sqlg.DatabaseDef,
+    format *sqlg.SqlFormatOptions, tables ...*sqlg.TableDef) error {
+    for _, t := range tables {
+        batch, err := dbDef.DropTable(t).GetSql(format)
+        if err != nil {
+            return err
+        }
+        _, err = batch.Exec(db)
+        if err != nil {
+            fmt.Println(err)
+        }
+    }
+    return nil
+}
+
+func createTables(db *sql.DB, dbDef *sqlg.DatabaseDef,
+    format *sqlg.SqlFormatOptions, tables ...*sqlg.TableDef) error {
+    for _, t := range tables {
+        batch, err := dbDef.CreateTable(t).GetSql(format)
+        if err != nil {
+            return err
+        }
+        _, err = batch.Exec(db)
+        if err != nil {
+            return err
+        }
+    }
+    return nil
+}
+
+func insertCustomers(db *sql.DB, dbDef *sqlg.DatabaseDef,
+    format *sqlg.SqlFormatOptions, custs *sqlg.TableDef,
+    firstName, lastName string) (int, error) {
+    ef := dbDef.ExprFactory()
+    // fill Customers
+    i1 := dbDef.Insert(custs,
+        ef.Field(custs, "FirstName"),
+        ef.Field(custs, "LastName") /*,ef.Field(custs, "ReferenceDate")*/).
+        Values(ef.Value(firstName),
+        ef.Value(lastName) /*ef.CurrentDateTime()*/).
+        Returning(ef.Field(custs, "Id"))
+    batch, err := i1.GetSql(format)
+    row, err := batch.ExecQueryRow(db)
+    if err != nil {
+        return 0, err
+    }
+    var id int
+    err = row.Scan(&id)
+    if err != nil {
+        return 0, err
+    }
+    fmt.Println(fmt.Sprintf("Customer is = %d", id))
+    return id, nil
+}
+
+func insertProducts(db *sql.DB, dbDef *sqlg.DatabaseDef,
+    format *sqlg.SqlFormatOptions,
+    prods *sqlg.TableDef, descr string, price float32) (int, error) {
+    ef := dbDef.ExprFactory()
+    // fill Products
+    i1 := dbDef.Insert(prods,
+        ef.Field(prods, "Descr"), ef.Field(prods, "Price")).
+        Values(ef.Value(descr), ef.Value(price)).
+        Returning(ef.Field(prods, "Id"))
+    batch, err := i1.GetSql(format)
+    row, err := batch.ExecQueryRow(db)
+    if err != nil {
+        return 0, err
+    }
+    var id int
+    err = row.Scan(&id)
+    if err != nil {
+        return 0, err
+    }
+    fmt.Println(fmt.Sprintf("Product is = %d", id))
+    return id, nil
+}
+
+type CustInfo struct {
+    FirstName string
+    LastName  string
+}
+
+type ProductInfo struct {
+    Descr string
+    Price float32
+}
+
+func insertData(db *sql.DB, dbDef *sqlg.DatabaseDef,
+    format *sqlg.SqlFormatOptions,
+    custs, prods, ords, dtls *sqlg.TableDef) error {
+    var custInfo = []CustInfo{
+        {FirstName: "Елена", LastName: "Макарова"},
+        {FirstName: "John", LastName: "Doe"},
+        {FirstName: "Жанар", LastName: "Уалиева"},
+        {FirstName: "Karen", LastName: "Wolfe"},
+        {FirstName: "Jacob", LastName: "Pratt"},
+        {FirstName: "Yang", LastName: "Wang"},
+        {FirstName: "Pedro", LastName: "Afonso"},
+        {FirstName: "Elizabeth", LastName: "Brown"},
+    }
+    for _, item := range custInfo {
+        _, err := insertCustomers(db, dbDef, format, custs,
+            item.FirstName, item.LastName)
+        if err != nil {
+            return err
+        }
+    }
+    var prodInfo = []ProductInfo{
+        {"Tofu", 23.25},
+        {"Boston Crab Meat", 18.4},
+        {Descr: "Jack's New England Clam Chowder", Price: 9.65},
+        {Descr: "Chocolade", Price: 12.75},
+        {Descr: "Filo Mix", Price: 7},
+        {Descr: "Tourtiere", Price: 7.45},
+        {Descr: "Ravioli Angelo", Price: 19.5},
+    }
+    for _, item := range prodInfo {
+        _, err := insertProducts(db, dbDef, format, prods, item.Descr, item.Price)
+        if err != nil {
+            return err
+        }
+    }
+    return nil
+}
+
+func createAndFillDatabase(dialect sqlg.SqlDialect) error {
+    var db *sql.DB
+    var err error
+    format := sqlg.NewSqlFormatOptions(dialect)
+    format.AddOptions( /*SBO_USE_DATABASE_NAME|*/
+        sqlg.SBO_USE_SCHEMA_NAME |
+            sqlg.SBO_DO_IF_OBJECT_EXISTS_NOT_EXISTS)
+    dbDef := createDatabaseDef("Test123")
+    if dialect.SupportDatabases() {
+        dbname := dialect.GetSystemDatabase()
+        db, err = openConnection(dialect, dbname)
+        err = createDatabase(db, dbDef, format)
+        db.Close()
+        if err != nil {
+            return err
+        }
+        db, err = openConnection(dialect, &dbDef.Name)
+    } else {
+        db, err = openConnection(dialect, nil)
+    }
+    if err != nil {
+        return err
+    }
+    defer db.Close()
+    err = db.Ping()
+    if err != nil {
+        return err
+    }
+    custs, prods, ords, dtls, err := getTables(dbDef)
+    if err != nil {
+        return err
+    }
+    /*sql, args, err := dbDef.CreateDatabase().GetSql(format)
+      log.Info(sql)
+      log.Info(args)
+      _, err = db.Exec(sql, args...)
+      if err != nil {
+          t.Fatal(err)
+      }*/
+    err = dropTables(db, dbDef, format, custs, prods, ords, dtls)
+    if err != nil {
+        return err
+    }
+    err = createTables(db, dbDef, format, custs, prods, ords, dtls)
+    if err != nil {
+        return err
+    }
+    err = insertData(db, dbDef, format, custs, prods, ords, dtls)
+    if err != nil {
+        return err
+    }
+    return nil
+}
+
+func main() {
+    //var dialect SqlDialect = SD_MSTSQL
+    var dialect sqlg.SqlDialect = sqlg.SD_PGSQL
+    //var dialect SqlDialect = SD_MYSQL
+    //var dialect SqlDialect = SD_SQLITE
+    err := createAndFillDatabase(dialect)
+    if err != nil {
+        log.Fatal(err)
+    }
+}
+
+func TestFive(t *testing.T) {
+    //var dialect SqlDialect = SD_MSTSQL
+    //var dialect SqlDialect = SD_PGSQL
+    var dialect sqlg.SqlDialect = sqlg.SD_MYSQL
+    //var dialect SqlDialect = SD_SQLITE
+    // build database
+    db := createDatabaseDef("Test123")
+    ef := db.ExprFactory()
+    custs, prods, ords, dtls, err := getTables(db)
+    if err != nil {
+        t.Fatal(err)
+    }
+    // build create table statement
+    format := sqlg.NewSqlFormatOptions(dialect)
+    format.AddOptions(sqlg.SBO_USE_DATABASE_NAME)
+    c1 := db.CreateTable(custs)
+    stats, err := c1.GetSql(format)
+    if err != nil {
+        t.Fatal(err)
+    }
+    fmt.Println(stats)
+    c2 := db.CreateTable(prods)
+    stats, err = c2.GetSql(format)
+    if err != nil {
+        t.Fatal(err)
+    }
+    fmt.Println(stats)
+    c3 := db.CreateTable(ords)
+    stats, err = c3.GetSql(format)
+    if err != nil {
+        t.Fatal(err)
+    }
+    fmt.Println(stats)
+    c4 := db.CreateTable(dtls)
+    stats, err = c4.GetSql(format)
+    if err != nil {
+        t.Fatal(err)
+    }
+    fmt.Println(stats)
+    // build select statement
+    s1 := db.Select(ef.FieldAlias(ef.Count(ef.Field(custs, "Id")), "CountId")).
+        From(ef.TableAlias(custs, "a")).
+        InnerJoin(ef.TableAlias(ords, "b"),
+        ef.Equal(ef.Field(ords, "CustId"), ef.Field(custs, "Id"))).
+        InnerJoin(dtls,
+        ef.Equal(ef.Field(dtls, "OrderId"), ef.Field(ords, "Id"))).
+        Where(ef.And(
+        ef.NotEqual(ef.Field(custs, "Id"), 1234),
+        ef.Equal(ef.Field(ords, "Descr"), "asdasd"))).
+        GroupBy(ef.Field(custs, "FirstName")).
+        OrderBy(ef.Field(custs, "Id"), ef.SortDesc(ef.TrimSpace(ef.Field(ords, "Descr"))))
+    stats, err = s1.GetSql(format)
+    if err != nil {
+        t.Fatal(err)
+    }
+    fmt.Println(stats)
+    // build select statement
+    s2 := db.Select( /*ef.Field(ords, "CustId") , ef.Field(dtls, "Id")*/).
+        From(ef.TableAlias(ords, "a")).
+        InnerJoin(ef.TableAlias(dtls, "b"),
+        ef.Equal(ef.Field(ords, "Id"), ef.Field(dtls, "OrderId")))
+    s3 := db.Select().
+        From(ef.TableAlias(custs, "a")).
+        InnerJoin(ef.TableAlias(s2, "b"),
+        ef.Equal(ef.Field(s2, "CustId"), ef.Field(custs, "Id")))
+    stats, err = s3.GetSql(format)
+    if err != nil {
+        t.Fatal(err)
+    }
+    fmt.Println(stats)
+    // build select statement
+    s4 := db.Select(ef.Field(ords, "CustId"),
+        ef.FieldAlias(ef.Mult(ef.Field(dtls, "Quantity"), 2), "aaaaa")).
+        From(ef.TableAlias(ords, "a")).
+        InnerJoin(ef.TableAlias(dtls, "b"),
+        ef.Equal(ef.Field(ords, "Id"), ef.Field(dtls, "OrderId")))
+    s5 := db.Select(ef.Field(s4, "aaaaa")).
+        From(ef.TableAlias(custs, "a")).
+        InnerJoin(ef.TableAlias(s4, "b"),
+        ef.Equal(ef.Field(s4, "aaaaa"), ef.Field(custs, "Id")))
+    stats, err = s5.GetSql(format)
+    if err != nil {
+        t.Fatal(err)
+    }
+    fmt.Println(stats)
+    // build insert statment 1
+    i1 := db.Insert(custs, ef.Field(custs, "Name")).
+        Values(ef.Value("aaaasdasd"))
+    stats, err = i1.GetSql(format)
+    if err != nil {
+        t.Fatal(err)
+    }
+    fmt.Println(stats)
+    // build insert statment 2
+    /*    s4 := db.Insert(cust, ef.Field(cust, "Name")).
+              From(s2)
+          sql, v, err = s4.GetSql(true)
+          if err != nil {
+              t.Fatal(err)
+          }
+          log.Info(sql)*/
+    // build update statement
+    u1 := db.Update(ef.TableAlias(custs, "a"),
+        ef.Set(ef.Field(custs, "Name"), ef.Value("ssssss"))).
+        Where(ef.Equal(ef.Field(custs, "Id"), ef.Value(1)))
+    stats, err = u1.GetSql(format)
+    if err != nil {
+        t.Fatal(err)
+    }
+    fmt.Println(stats)
+    // build delete statement
+    d1 := db.Delete(dtls).
+        Where(ef.Equal(ef.Field(dtls, "Id"), 1000))
+    stats, err = d1.GetSql(format)
+    if err != nil {
+        t.Fatal(err)
+    }
+    fmt.Println(stats)
+}
+
+func TestSix(t *testing.T) {
+    var dialect sqlg.SqlDialect = sqlg.SD_SQLITE
+    dbname := "Test123"
+    db, err := openConnection(dialect, &dbname)
+    if err != nil {
+        t.Fatal(err)
+    }
+    defer db.Close()
+    err = db.Ping()
+    if err != nil {
+        t.Fatal(err)
+    }
+    dbdef := createDatabaseDef(dbname)
+    ef := dbdef.ExprFactory()
+    _, prods, _, _, err := getTables(dbdef)
+    if err != nil {
+        t.Fatal(err)
+    }
+    format := sqlg.NewSqlFormatOptions(dialect)
+    s1 := dbdef.Select(ef.Field(prods, "Descr"),
+        ef.Field(prods, "Price")).From(prods)
+    batch, err := s1.GetSql(format)
+    rows, err := batch.Query(db)
+    if err != nil {
+        t.Fatal(err)
+    }
+    for rows.Next() {
+        var descr string
+        var price float32
+        err = rows.Scan(&descr, &price)
+        if err != nil {
+            t.Fatal(err)
+        }
+        fmt.Println(descr, price)
+    }
+
+}

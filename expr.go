@@ -1,0 +1,1049 @@
+package sqlg
+
+import (
+    "bytes"
+    "strconv"
+    "time"
+)
+
+type SqlFunc int
+
+const (
+    // sql operators
+    SF_UNDEF      SqlFunc = 0
+    SF_CUSTOMFUNC         = 1 << iota
+    // logycal operations
+    SF_EQUAL       //  expr1 = expr2
+    SF_NOT_EQ      //  expr1 <> expr2
+    SF_LESS        //  expr1 < expr2
+    SF_LESS_EQ     //  expr1 <= expr2
+    SF_GREAT       //  expr1 > expr2
+    SF_GREAT_EQ    //  expr1 >= expr2
+    SF_LIKE        //  expr1 like expr2
+    SF_IN          //  expr0 in (expr1, expr2, ... exprN)
+    SF_NOT_IN      //  expr0 not in (expr1, expr2, ... exprN)
+    SF_BEETWEN     //  expr0 between (expr1, expr2)
+    SF_AND         //  expr1 and expr2
+    SF_OR          //  expr1 or expr2
+    SF_IS_NULL     //  expr1 is null
+    SF_IS_NOT_NULL //  expr1 is not null
+    // ariphmetic operations
+    SF_ADD  //  addition
+    SF_SUBT //  subtraction
+    SF_MULT //  multiplication
+    SF_DIV  //  division
+    // special logycal operation
+    SF_CASE_THEN_ELSE //  case when expr0 then expr1 else expr2 end
+    // aggregate functions
+    SF_AGR_SUM   //  sum(op1)
+    SF_AGR_MIN   //  min(op1)
+    SF_AGR_MAX   //  max(op1)
+    SF_AGR_AVG   //  avg(op1)
+    SF_AGR_COUNT //  count(op1)
+    // group by asc, desc hints
+    SF_ORD_ASC  //  field1 asc
+    SF_ORD_DESC //  field1 desc
+    // sql specific: date functions
+    SF_CURDATE
+    SF_CURTIME
+    SF_CURDATETIME
+    // sql specific: string functions
+    SF_TRIMSPACE
+    SF_LTRIMSPACE
+    SF_RTRIMSPACE
+)
+
+func (sf SqlFunc) String() string {
+    fnc := map[SqlFunc]string{
+        SF_UNDEF:    "undefined function",
+        SF_EQUAL:    "op1 = op2",
+        SF_NOT_EQ:   "op1 <> op2",
+        SF_LESS:     "op1 < op2",
+        SF_LESS_EQ:  "op1 <= op2",
+        SF_GREAT:    "op1 > op2",
+        SF_GREAT_EQ: "op1 >= op2",
+        SF_LIKE:     "op1 like op2",
+        SF_IN:       "op in (op1, op2, ... opn)",
+        SF_NOT_IN:   "not in (op1, op2, ... opn)",
+        SF_BEETWEN:  "op1 between (op1, op2)",
+        SF_AND:      "op1 and op2",
+        SF_OR:       "op1 or op2",
+        // aggregate functions
+        SF_AGR_SUM:   "sum(op1)",
+        SF_AGR_MIN:   "min(op1)",
+        SF_AGR_MAX:   "max(op1)",
+        SF_AGR_AVG:   "avg(op1)",
+        SF_AGR_COUNT: "count(op1)",
+        // group by asc, desc hints
+        SF_ORD_ASC:  "expr1 asc",
+        SF_ORD_DESC: "expr1 desc",
+        // sql specific: date functions
+        SF_CURDATE:     "get_current_date()",
+        SF_CURTIME:     "get_current_time()",
+        SF_CURDATETIME: "get_current_datetime()",
+        // sql specific: string functions
+        SF_TRIMSPACE:  "trim()",
+        SF_LTRIMSPACE: "trim_left()",
+        SF_RTRIMSPACE: "trim_right()",
+    }
+    return fnc[sf]
+}
+
+func (sf SqlFunc) In(funcs SqlFunc) bool {
+    return sf&funcs != SF_UNDEF
+}
+
+type QueryEntries struct {
+    Queries []Query
+}
+
+func NewQueryEntries() *QueryEntries {
+    this := &QueryEntries{}
+    return this
+}
+
+func (this *QueryEntries) AddEntry(query Query) {
+    this.Queries = append(this.Queries, query)
+}
+
+func (this *QueryEntries) FindEntry(query Query) (Query, bool) {
+    var entryFound Query
+    ambiguous := false
+    for _, entry := range this.Queries {
+        queryTableBased, queryTable := query.IsTableBased()
+        entryTableBased, entryTable := entry.IsTableBased()
+        entryAlias, entryAliasBased := entry.(QueryAlias)
+        if queryTableBased && entryTableBased &&
+            queryTable.Name == entryTable.Name ||
+            entryAliasBased && entryAlias.GetSource() == query ||
+            entry == query {
+            if entryFound == nil {
+                entryFound = entry
+            } else {
+                ambiguous = true
+                break
+            }
+        }
+    }
+    return entryFound, ambiguous
+}
+
+type ExprBuildContext struct {
+    SectionKind    SectionKind
+    SubsectionKind SubsectionKind
+    Stack          *CallStack
+    Format         *Format
+    DataSources    *QueryEntries
+}
+
+func NewExprBuildContext(
+    sectionKind SectionKind,
+    subsectionKind SubsectionKind,
+    stack *CallStack,
+    format *Format,
+    entries *QueryEntries) *ExprBuildContext {
+    c := &ExprBuildContext{SectionKind: sectionKind,
+        SubsectionKind: subsectionKind,
+        Stack:          stack,
+        Format:         format,
+        DataSources:    entries}
+    return c
+}
+
+type TokenValue struct {
+    Value interface{}
+}
+
+func doubleQuote(value string) string {
+    var buf bytes.Buffer
+    for _, ch := range value {
+        buf.WriteRune(ch)
+        if ch == '\'' {
+            buf.WriteRune(ch)
+        }
+    }
+    return buf.String()
+}
+
+func (this *TokenValue) formatTimeDuration(context *ExprBuildContext,
+    stat *Statement) {
+    const DURATION_FORMAT = "15:04:05.0000000"
+    d := this.Value.(time.Duration)
+    t := time.Time{}
+    t = t.Add(d)
+    if context.Format.Inline() {
+        stat.writeString("'%s'", t.Format(DURATION_FORMAT))
+    } else {
+        stat.writeString("?")
+        stat.appendArg(f("%s", t.Format(DURATION_FORMAT)))
+    }
+}
+
+func (this *TokenValue) formatTime(context *ExprBuildContext,
+    stat *Statement) {
+    const TIME_FORMAT = "2006-01-02T15:04:05.000"
+    t := this.Value.(time.Time)
+    if context.Format.Inline() {
+        stat.writeString("'%s'", t.Format(TIME_FORMAT))
+    } else {
+        stat.writeString("?")
+        stat.appendArg(f("%s", t.Format(TIME_FORMAT)))
+    }
+}
+
+func (this *TokenValue) GetSql(context *ExprBuildContext) (*Statement, error) {
+    stat := NewStatement(SS_UNDEF)
+    if context.Format.Inline() {
+        switch this.Value.(type) {
+        case string:
+            switch context.Format.Dialect {
+            case DI_MSTSQL:
+                stat.writeString("N'%s'", doubleQuote(this.Value.(string)))
+            default:
+                stat.writeString("'%s'", doubleQuote(this.Value.(string)))
+            }
+        case time.Time:
+            switch context.Format.Dialect {
+            case DI_SQLITE:
+                const TIME_FORMAT = "2006-01-02T15:04:05.000"
+                tm := this.Value.(time.Time)
+                stat.writeString("'%s'", tm.Format(TIME_FORMAT))
+            default:
+                tm := this.Value.(time.Time)
+                stat.writeString("'%v'", tm)
+            }
+            //            this.formatTime(context, stat)
+        case time.Duration:
+            this.formatTimeDuration(context, stat)
+        default:
+            stat.writeString("%v", this.Value)
+        }
+    } else {
+        switch this.Value.(type) {
+        // Found during test case, that Microsoft SQL doesn't let insert
+        // time.Duration to the time(7) field, reporting that it's
+        // impossible to insert int value to time(7) field.
+        // So, convert here time.Duration to string representation.
+        // TODO Perhaphs SQlite should be added here as well.
+        case time.Duration:
+            this.formatTimeDuration(context, stat)
+            //        case time.Time:
+            //            this.formatTime(context, stat)
+        default:
+            stat.writeString("?")
+            stat.appendArg(this.Value)
+        }
+    }
+    return stat, nil
+}
+
+func (this *TokenValue) CollectFields() []*TokenField {
+    return []*TokenField{}
+}
+
+func (this *TokenValue) CheckContext(sectionKind SectionKind,
+    subsectionKind SubsectionKind, stack *CallStack) bool {
+    return true
+}
+
+type CustomDialectFuncDef struct {
+    Dialect Dialect
+    Func    *FuncTemplate
+}
+
+type CustomFuncDef struct {
+    Funcs []*CustomDialectFuncDef
+}
+
+func NewCustomDialectFunc(dialect Dialect, template string,
+    min int, max int) *CustomDialectFuncDef {
+    fnc := &CustomDialectFuncDef{Dialect: dialect,
+        Func: &FuncTemplate{Template: template, ParamMin: min, ParamMax: max}}
+    return fnc
+}
+
+func NewCustomFunc(funcs ...*CustomDialectFuncDef) *CustomFuncDef {
+    this := &CustomFuncDef{Funcs: funcs}
+    return this
+}
+
+type TokenFunc struct {
+    Func       SqlFunc
+    CustomFunc *CustomFuncDef
+    Args       []Expr
+}
+
+type BuildSqlFunc struct {
+    Dialects       Dialect
+    SectionKind    SectionKind
+    SubsectionKind SubsectionKind
+    Template       *FuncTemplate
+}
+
+func bsf(dialects Dialect, sectionKind SectionKind,
+    subsectionKind SubsectionKind, template *FuncTemplate) *BuildSqlFunc {
+    fc := &BuildSqlFunc{Dialects: dialects, SectionKind: sectionKind,
+        SubsectionKind: subsectionKind, Template: template}
+    return fc
+}
+
+type BuildSqlFuncList struct {
+    Items []*BuildSqlFunc
+}
+
+func bsfl(items ...*BuildSqlFunc) *BuildSqlFuncList {
+    this := &BuildSqlFuncList{Items: items}
+    return this
+}
+
+type FuncTemplate struct {
+    // {} stands for all provided arguments
+    // {0} {1}...{N} for specific one
+    Template string
+    ParamMin int
+    ParamMax int
+}
+
+func ft(template string, min, max int) *FuncTemplate {
+    this := &FuncTemplate{Template: template, ParamMin: min, ParamMax: max}
+    return this
+}
+
+func (ft *FuncTemplate) GetSql(context *ExprBuildContext,
+    args ...Expr) (*Statement, error) {
+    stat := NewStatement(SS_UNDEF)
+    startBrPos := -1
+    endBrPos := -1
+    for i, ch := range ft.Template {
+        if ch == '{' {
+            startBrPos = i
+            continue
+        } else if ch == '}' {
+            endBrPos = i
+            // get index
+            if startBrPos >= 0 {
+                strIndex := ft.Template[startBrPos+1 : endBrPos]
+                if strIndex != "" {
+                    k, err := strconv.Atoi(strIndex)
+                    if err != nil {
+                        return nil, e("Invalid index {%s} in "+
+                            "expression template \"%s\"", strIndex, ft.Template)
+                    }
+                    if k >= len(args) {
+                        return nil, e("Index {%k} exceed argument counts for "+
+                            "expression template \"%s\"", k, ft.Template)
+                    }
+                    stat2, err := args[k].GetSql(context)
+                    if err != nil {
+                        return nil, err
+                    }
+                    stat.appendStatPart(stat2)
+                } else {
+                    c := len(args)
+                    if ft.ParamMin > ft.ParamMax {
+                        return nil, e("Minimum argument count %d can't exceed "+
+                            "maximum %d in expression template \"%s\"", ft.ParamMin,
+                            ft.ParamMax, ft.Template)
+                    }
+                    if ft.ParamMin > c {
+                        return nil, e("Declared minimum argument count %d exceed "+
+                            "provided argument count in expression template \"%s\"",
+                            ft.ParamMin, ft.Template)
+                    }
+                    if ft.ParamMax < c {
+                        c = ft.ParamMax
+                    }
+                    for j := 0; j < c; j++ {
+                        stat2, err := args[j].GetSql(context)
+                        if err != nil {
+                            return nil, err
+                        }
+                        stat.appendStatPart(stat2)
+                        if j < len(args)-1 {
+                            stat.writeString(",")
+                        }
+                    }
+                }
+                startBrPos = -1
+                endBrPos = -1
+            } else {
+                return nil, e("Closing } found without opening {"+
+                    " in expression template \"%s\"", ft.Template)
+            }
+        } else if startBrPos == -1 {
+            if ch == '?' {
+                return nil, e("Can't use %c character in expression "+
+                    "template \"%s\"", ch, ft.Template)
+            }
+            stat.writeRune(ch)
+        }
+    }
+    return stat, nil
+}
+
+func (this *TokenFunc) getFuncTemplate(dialect Dialect) *FuncTemplate {
+    // general templates which not depend on sql dialect
+    fnc := map[SqlFunc]*BuildSqlFuncList{
+        SF_AGR_AVG:     bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("avg({0})", 1, 1))),
+        SF_AGR_COUNT:   bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("count({0})", 1, 1))),
+        SF_AGR_MAX:     bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("max({0})", 1, 1))),
+        SF_AGR_MIN:     bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("min({0})", 1, 1))),
+        SF_AGR_SUM:     bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("sum({0})", 1, 1))),
+        SF_AND:         bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0} and {1}", 2, 2))),
+        SF_BEETWEN:     bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0} between({1}, {2})", 3, 3))),
+        SF_EQUAL:       bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0} = {1}", 2, 2))),
+        SF_LESS:        bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0} < {1}", 2, 2))),
+        SF_LESS_EQ:     bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0} <= {1}", 2, 2))),
+        SF_LIKE:        bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0} like {1}", 2, 2))),
+        SF_GREAT:       bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0} > {1}", 2, 2))),
+        SF_GREAT_EQ:    bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0} >= {1}", 2, 2))),
+        SF_NOT_EQ:      bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0} <> {1}", 2, 2))),
+        SF_OR:          bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0} or {1}", 2, 2))),
+        SF_IN:          bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0} in ({1})", 2, 2))),
+        SF_NOT_IN:      bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0} not in ({1})", 2, 2))),
+        SF_IS_NULL:     bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0} is null", 1, 1))),
+        SF_IS_NOT_NULL: bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0} is not null", 1, 1))),
+        SF_CASE_THEN_ELSE: bsfl(
+            bsf(DI_MYSQL, SK_ANY, SSK_ANY, ft("case when {0} then {1} else {2} end case", 3, 3)),
+            bsf(DI_ANY, SK_ANY, SSK_ANY, ft("case when {0} then {1} else {2} end", 3, 3))),
+        SF_ORD_ASC:  bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0} asc", 1, 1))),
+        SF_ORD_DESC: bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0} desc", 1, 1))),
+        SF_ADD:      bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0}+{1}", 2, 2))),
+        SF_SUBT:     bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0}-{1}", 2, 2))),
+        SF_MULT:     bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0}*{1}", 2, 2))),
+        SF_DIV:      bsfl(bsf(DI_ANY, SK_ANY, SSK_ANY, ft("{0}/{1}", 2, 2))),
+        // string functions
+        SF_TRIMSPACE: bsfl(
+            bsf(DI_MSTSQL, SK_ANY, SSK_ANY, ft("ltrim(rtrim({0}))", 1, 1)),
+            bsf(DI_PGSQL, SK_ANY, SSK_ANY, ft("trim(both from {0})", 1, 1)),
+            bsf(DI_MYSQL, SK_ANY, SSK_ANY, ft("___({0})", 1, 1)),
+            bsf(DI_SQLITE, SK_ANY, SSK_ANY, ft("___({0})", 1, 1))),
+        SF_RTRIMSPACE: bsfl(
+            bsf(DI_MSTSQL, SK_ANY, SSK_ANY, ft("rtrim({0}))", 1, 1)),
+            bsf(DI_PGSQL, SK_ANY, SSK_ANY, ft("trim(trailing from {0})", 1, 1)),
+            bsf(DI_MYSQL, SK_ANY, SSK_ANY, ft("___({0})", 1, 1)),
+            bsf(DI_SQLITE, SK_ANY, SSK_ANY, ft("___({0})", 1, 1))),
+        SF_LTRIMSPACE: bsfl(
+            bsf(DI_MSTSQL, SK_ANY, SSK_ANY, ft("ltrim(rtrim({0}))", 1, 1)),
+            bsf(DI_PGSQL, SK_ANY, SSK_ANY, ft("trim(leading from {0})", 1, 1)),
+            bsf(DI_MYSQL, SK_ANY, SSK_ANY, ft("___({0})", 1, 1)),
+            bsf(DI_SQLITE, SK_ANY, SSK_ANY, ft("___({0})", 1, 1))),
+        // date/time functions
+        SF_CURDATE: bsfl(
+            bsf(DI_MSTSQL, SK_ANY, SSK_ANY, ft("cust(getdate() as date)", 0, 0)),
+            bsf(DI_PGSQL, SK_ANY, SSK_ANY, ft("current_date", 0, 0)),
+            bsf(DI_MYSQL, SK_ANY, SSK_ANY, ft("curdate()", 0, 0)),
+            bsf(DI_SQLITE, SK_CREATE_TABLE, SSK_ANY, ft("current_date", 0, 0)),
+            bsf(DI_SQLITE, SK_ANY, SSK_ANY, ft("date('now')", 0, 0))),
+        SF_CURDATETIME: bsfl(
+            bsf(DI_MSTSQL, SK_ANY, SSK_ANY, ft("getdate()", 0, 0)),
+            bsf(DI_PGSQL, SK_ANY, SSK_ANY, ft("current_timestamp", 0, 0)),
+            bsf(DI_MYSQL, SK_ANY, SSK_ANY, ft("now()", 0, 0)),
+            bsf(DI_SQLITE, SK_CREATE_TABLE, SSK_ANY, ft("current_timestamp", 0, 0)),
+            bsf(DI_SQLITE, SK_ANY, SSK_ANY, ft("datetime('now')", 0, 0))),
+        SF_CURTIME: bsfl(
+            bsf(DI_MSTSQL, SK_ANY, SSK_ANY, ft("cust(getdate() as time)", 0, 0)),
+            bsf(DI_PGSQL, SK_ANY, SSK_ANY, ft("current_time", 0, 0)),
+            bsf(DI_MYSQL, SK_ANY, SSK_ANY, ft("curtime()", 0, 0)),
+            bsf(DI_SQLITE, SK_CREATE_TABLE, SSK_ANY, ft("current_time", 0, 0)),
+            bsf(DI_SQLITE, SK_ANY, SSK_ANY, ft("time('now')", 0, 0))),
+    }
+    /*    // Microsoft T-SQL specific templates
+          fncMicrosoftSql := map[FuncContext]FuncTemplate{
+              // date functions
+              SF_CURDATE:     FT{"cast(getdate() as date)", 0},
+              SF_CURDATETIME: FT{"getdate()", 0},
+              SF_CURTIME:     FT{"cast(getdate() as time)", 0},
+          }
+          // PostgreSQL specific templates
+          fncPostgreSql := map[SqlFunc]FT{
+              // date functions
+              SF_CURDATE:     FT{"current_date", 0},
+              SF_CURDATETIME: FT{"current_timestamp", 0},
+              SF_CURTIME:     FT{"current_time", 0},
+          }
+          // MySql specific templates
+          fncMySql := map[SqlFunc]FT{
+              // date functions
+              SF_CURDATE:     FT{"curdate()", 0},
+              SF_CURDATETIME: FT{"now()", 0},
+              SF_CURTIME:     FT{"curtime()", 0},
+          }
+          // Sqllite specific templates
+          fncSqlite := map[SqlFunc]FT{
+              // date functions
+              SF_CURDATE:     FT{"date('now')", 0},
+              SF_CURDATETIME: FT{"datetime('now')", 0},
+              SF_CURTIME:     FT{"time('now')", 0},
+          }*/
+    if fcl, ok := fnc[this.Func]; ok {
+        for _, fc := range fcl.Items {
+            if dialect.In(fc.Dialects) {
+                return fc.Template
+            }
+        }
+    }
+    return nil
+}
+
+func (this *TokenFunc) GetSql(context *ExprBuildContext) (*Statement, error) {
+    dialect := context.Format.Dialect
+    if this.Func == SF_CUSTOMFUNC {
+        for _, fnc := range this.CustomFunc.Funcs {
+            if dialect.In(fnc.Dialect) {
+                stat, err := fnc.Func.GetSql(context, this.Args...)
+                if err != nil {
+                    return nil, err
+                }
+                return stat, nil
+            }
+        }
+        return nil, e("Custom function is undefined for dialect \"%v\"", dialect)
+    } else {
+        fnc := this.getFuncTemplate(dialect)
+        if fnc != nil {
+            /*        if this.FlagsAny != SP_UNDEF &&
+                      context.Flags&t.FlagsAny == SP_UNDEF ||
+                      this.FlagsEach != SP_UNDEF &&
+                          context.Flags&t.FlagsEach != this.FlagsEach {
+                      return nil, e("Functon \"%s\" can't be used in \"%v\" "+
+                          "without \"%v\"", this.Func, context.Flags, this.FlagsEach)
+                  }*/
+            stat, err := fnc.GetSql(context, this.Args...)
+            if err != nil {
+                return nil, err
+            }
+            return stat, nil
+        }
+    }
+    return nil, e("Unknown how to process expression \"%v\" "+
+        "in dialect \"%v\"", this.Func, dialect)
+}
+
+func (this *TokenFunc) CollectFields() []*TokenField {
+    var fields []*TokenField
+    for _, item := range this.Args {
+        f := item.CollectFields()
+        fields = append(fields, f...)
+    }
+    return fields
+}
+
+func (this *TokenFunc) CheckContext(sectionKind SectionKind,
+    subsectionKind SubsectionKind, stack *CallStack) bool {
+    switch this.Func {
+    case SF_AGR_AVG, SF_AGR_COUNT, SF_AGR_MAX, SF_AGR_MIN, SF_AGR_SUM:
+        if sectionKind != SK_SELECT_GROUP_BY &&
+            stack.First(SK_SELECT_GROUP_BY) != nil {
+            return true
+        } else {
+            return false
+        }
+    }
+    return true
+}
+
+type TokenField struct {
+    DataSource Query
+    Name       string
+}
+
+func (this *TokenField) FindEntryAndValidate(context *ExprBuildContext) (Query, error) {
+    objstr, err := formatPrettyDataSource(this.DataSource,
+        false, &context.Format.Dialect)
+    if err != nil {
+        return nil, err
+    }
+    entry, entryAmb := context.DataSources.FindEntry(this.DataSource)
+    if entry == nil {
+        str := f("Column \"%s\" is associated with %s, "+
+            "which haven't been added to the statement", this.Name, objstr)
+        return nil, e(str)
+    }
+    if entryAmb {
+        return nil, e("Reference to %s is ambiguous in column \"%s\"",
+            objstr, this.Name)
+    }
+    // perform validation of column name, if option is specified
+    if context.Format.ColumnNameAndCountValidationIsOn() {
+        colAmb, err := entry.ColumnIsAmbiguous(this.Name)
+        if err != nil {
+            return nil, err
+        }
+        if colAmb {
+            return nil, e("Reference to column \"%s\" is ambiguous in %s",
+                this.Name, objstr)
+        }
+        exists, err := entry.ColumnExists(this.Name)
+        if err != nil {
+            return nil, err
+        }
+        if exists == false {
+            return nil, e("Can't find column \"%s\" in %s", this.Name, objstr)
+        }
+    }
+    tableBased, _ := entry.IsTableBased()
+    _, aliasBased := entry.(QueryAlias)
+    if tableBased == false && aliasBased == false {
+        objstr, err := formatPrettyDataSource(entry,
+            false, &context.Format.Dialect)
+        if err != nil {
+            return nil, err
+        }
+        return nil, e("Column \"%s\" reference to object that is not a table "+
+            "and neither has alias specified: %s", this.Name, objstr)
+    }
+    return entry, nil
+}
+
+func (this *TokenField) GetSql(context *ExprBuildContext) (*Statement, error) {
+    entry, err := this.FindEntryAndValidate(context)
+    if err != nil {
+        return nil, err
+    }
+    stat := NewStatement(SS_UNDEF)
+    if context.SectionKind == SK_INSERT_RETURNING {
+        dialect := context.Format.Dialect
+        switch dialect {
+        case DI_PGSQL:
+            stat.writeString(f("%s",
+                context.Format.formatObjectName(this.Name)))
+        case DI_MSTSQL:
+            stat.writeString(f("inserted.%s",
+                context.Format.formatObjectName(this.Name)))
+        default:
+            return nil, e("Can't provide field specification "+
+                "for returning section in notation \"%v\"", dialect)
+        }
+    } else {
+        tableBased, table := entry.IsTableBased()
+        queryAlias, aliasBased := entry.(QueryAlias)
+        if aliasBased {
+            stat.writeString(f("%s.%s", queryAlias.GetAlias(),
+                context.Format.formatObjectName(this.Name)))
+        } else if tableBased {
+            stat.writeString(f("%s.%s",
+                context.Format.formatTableName(table.Name),
+                context.Format.formatObjectName(this.Name)))
+        }
+    }
+    return stat, nil
+}
+
+func (this *TokenField) CollectFields() []*TokenField {
+    return []*TokenField{this}
+}
+
+/*
+func (this *TokenField) ContextFlagsAny() SqlPart {
+    return SP_DELETE_WHERE | SP_INSERT_RETURNING | SP_SELECT_FIELDS |
+        SP_SELECT_GROUP_BY | SP_SELECT_JOIN_COND | SP_SELECT_ORDER_BY |
+        SP_SELECT_WHERE | SP_UPDATE_FIELDS | SP_UPDATE_JOIN_COND |
+        SP_UPDATE_WHERE
+}
+
+func (this *TokenField) ContextFlagsEach() SqlPart {
+    return SP_UNDEF
+}
+*/
+func (this *TokenField) CheckContext(sectionKind SectionKind,
+    subsectionKind SubsectionKind,
+    stack *CallStack) bool {
+    // TODO
+    return true
+}
+
+func (this *TokenField) GetFieldAliasOrName() string {
+    return this.Name
+}
+
+type TokenFieldAlias struct {
+    Expr  Expr
+    Alias string
+}
+
+func (this *TokenFieldAlias) GetSql(context *ExprBuildContext) (*Statement, error) {
+    stat, err := this.Expr.GetSql(context)
+    if err != nil {
+        return nil, err
+    }
+    newst := NewStatement(SS_UNDEF)
+    newst.writeString("%s as %s", stat.Sql(), this.Alias)
+    newst.appendArgs(stat.Args)
+    return newst, nil
+}
+
+func (this *TokenFieldAlias) CollectFields() []*TokenField {
+    return this.Expr.CollectFields()
+}
+
+/*
+func (this *TokenFieldAlias) ContextFlagsAny() SqlPart {
+    return SP_UNDEF
+}
+
+func (this *TokenFieldAlias) ContextFlagsEach() SqlPart {
+    return SP_UNDEF
+}
+*/
+func (this *TokenFieldAlias) CheckContext(sectionKind SectionKind,
+    subsectionKind SubsectionKind, stack *CallStack) bool {
+    // TODO
+    return true
+}
+
+func (this *TokenFieldAlias) GetFieldAliasOrName() string {
+    return this.Alias
+}
+
+type TokenTableAlias struct {
+    DataSource Query
+    Alias      string
+}
+
+func (this *TokenTableAlias) IsTableBased() (bool, *TableDef) {
+    return this.DataSource.IsTableBased()
+}
+
+func (this *TokenTableAlias) GetColumnCount() (int, error) {
+    return this.DataSource.GetColumnCount()
+}
+
+func (this *TokenTableAlias) ColumnIsAmbiguous(name string) (bool, error) {
+    return this.DataSource.ColumnIsAmbiguous(name)
+}
+
+func (this *TokenTableAlias) ColumnExists(name string) (bool, error) {
+    return this.DataSource.ColumnExists(name)
+}
+
+func (this *TokenTableAlias) GetSource() Query {
+    return this.DataSource
+}
+
+func (this *TokenTableAlias) GetAlias() string {
+    return this.Alias
+}
+
+type TokenFieldSet struct {
+    Field *TokenField
+    Value Expr
+}
+
+func (this *TokenFieldSet) GetSql(context *ExprBuildContext) (*Statement, error) {
+    stat := NewStatement(SS_UNDEF)
+    stat.writeString("%s = ",
+        context.Format.formatObjectName(this.Field.Name))
+    stat2, err := this.Value.GetSql(context)
+    if err != nil {
+        return nil, err
+    }
+    stat.appendStatPart(stat2)
+    return stat, nil
+}
+
+type TokenError struct {
+    Error error
+}
+
+func NewTokenError(err error) *TokenError {
+    this := &TokenError{Error: err}
+    return this
+}
+
+func (this *TokenError) GetSql(context *ExprBuildContext) (*Statement, error) {
+    return nil, this.Error
+}
+
+func (this *TokenError) CollectFields() []*TokenField {
+    return nil
+}
+
+func (this *TokenError) CheckContext(sectionType SectionKind,
+    subsectionType SubsectionKind,
+    stack *CallStack) bool {
+    return false
+}
+
+type ExprFactory struct {
+}
+
+func NewExprFactory() *ExprFactory {
+    fry := &ExprFactory{}
+    return fry
+}
+
+func (this *ExprFactory) Field(query Query, fieldName string) *TokenField {
+    exp := &TokenField{DataSource: query, Name: fieldName}
+    return exp
+}
+
+func (this *ExprFactory) Value(value interface{}) *TokenValue {
+    exp := &TokenValue{Value: value}
+    return exp
+}
+
+// shortage and full equivalent of function Value(...)
+func (this *ExprFactory) V(value interface{}) *TokenValue {
+    exp := &TokenValue{Value: value}
+    return exp
+}
+
+func (this *ExprFactory) Set(field *TokenField, value Expr) *TokenFieldSet {
+    exp := &TokenFieldSet{Field: field, Value: value}
+    return exp
+}
+
+func (this *ExprFactory) makeFunc(function SqlFunc,
+    args ...Expr) *TokenFunc {
+    exp := &TokenFunc{Args: args, Func: function}
+    return exp
+}
+
+func (this *ExprFactory) convertToExpr(expr interface{}) Expr {
+    switch expr.(type) {
+    case Expr:
+        return expr.(Expr)
+    case string, int, int32, int64, uint, uint32, uint64, float32, float64, bool:
+        return this.Value(expr)
+    case time.Duration, time.Time:
+        return this.Value(expr)
+    default:
+        return NewTokenError(e(
+            "Don't know how to convert the value to sql expression: %s", expr))
+    }
+}
+
+// sql operator: =
+func (this *ExprFactory) Equal(l Expr, r interface{}) *TokenFunc {
+    r2 := this.convertToExpr(r)
+    return this.makeFunc(SF_EQUAL, l, r2)
+}
+
+// sql operator: <>
+func (this *ExprFactory) NotEqual(l Expr, r interface{}) *TokenFunc {
+    r2 := this.convertToExpr(r)
+    return this.makeFunc(SF_NOT_EQ, l, r2)
+}
+
+// sql operator: AND
+func (this *ExprFactory) And(l, r Expr) *TokenFunc {
+    return this.makeFunc(SF_AND, l, r)
+}
+
+// sql operator: OR
+func (this *ExprFactory) Or(l, r Expr) *TokenFunc {
+    return this.makeFunc(SF_OR, l, r)
+}
+
+// sql operator: <
+func (this *ExprFactory) Less(l Expr, r interface{}) *TokenFunc {
+    r2 := this.convertToExpr(r)
+    return this.makeFunc(SF_LESS, l, r2)
+}
+
+// sql operator: >
+func (this *ExprFactory) Greater(l Expr, r interface{}) *TokenFunc {
+    r2 := this.convertToExpr(r)
+    return this.makeFunc(SF_GREAT, l, r2)
+}
+
+// sql operator: <=
+func (this *ExprFactory) LessEq(l Expr, r interface{}) *TokenFunc {
+    r2 := this.convertToExpr(r)
+    return this.makeFunc(SF_LESS_EQ, l, r2)
+}
+
+// sql operator: >=
+func (this *ExprFactory) GreaterEq(l Expr, r interface{}) *TokenFunc {
+    r2 := this.convertToExpr(r)
+    return this.makeFunc(SF_GREAT_EQ, l, r2)
+}
+
+// TODO this function should be on top of expr calls
+// TODO some verification should be implemented
+// order by: asc
+func (this *ExprFactory) SortAsc(expr Expr) *TokenFunc {
+    return this.makeFunc(SF_ORD_ASC, expr)
+}
+
+// TODO this function should be on top of expr calls
+// TODO some verification should be implemented
+// order by: desc
+func (this *ExprFactory) SortDesc(expr Expr) *TokenFunc {
+    return this.makeFunc(SF_ORD_DESC, expr)
+}
+
+// aggregate function: sum()
+func (this *ExprFactory) Sum(expr Expr) *TokenFunc {
+    return this.makeFunc(SF_AGR_SUM, expr)
+}
+
+// agregate function: count()
+func (this *ExprFactory) Count(expr Expr) *TokenFunc {
+    return this.makeFunc(SF_AGR_COUNT, expr)
+}
+
+// agregate function: min()
+func (this *ExprFactory) Min(expr Expr) *TokenFunc {
+    return this.makeFunc(SF_AGR_MIN, expr)
+}
+
+// agregate function: max()
+func (this *ExprFactory) Max(expr Expr) *TokenFunc {
+    return this.makeFunc(SF_AGR_MAX, expr)
+}
+
+// agregate function: avg()
+func (this *ExprFactory) Average(expr Expr) *TokenFunc {
+    return this.makeFunc(SF_AGR_AVG, expr)
+}
+
+func (this *ExprFactory) IsNull(expr Expr) *TokenFunc {
+    return this.makeFunc(SF_IS_NULL, expr)
+}
+
+func (this *ExprFactory) IsNotNull(expr Expr) *TokenFunc {
+    return this.makeFunc(SF_IS_NOT_NULL, expr)
+}
+
+func (this *ExprFactory) Add(expr1 Expr, expr2 interface{}) *TokenFunc {
+    r2 := this.convertToExpr(expr2)
+    return this.makeFunc(SF_ADD, expr1, r2)
+}
+
+func (this *ExprFactory) Subt(expr1 Expr, expr2 interface{}) *TokenFunc {
+    r2 := this.convertToExpr(expr2)
+    return this.makeFunc(SF_SUBT, expr1, r2)
+}
+
+func (this *ExprFactory) Mult(expr1 Expr, expr2 interface{}) *TokenFunc {
+    r2 := this.convertToExpr(expr2)
+    return this.makeFunc(SF_MULT, expr1, r2)
+}
+
+func (this *ExprFactory) Div(expr1 Expr, expr2 interface{}) *TokenFunc {
+    r2 := this.convertToExpr(expr2)
+    return this.makeFunc(SF_DIV, expr1, r2)
+}
+
+func (this *ExprFactory) CaseThenElse(expr1 Expr, expr2, expr3 interface{}) *TokenFunc {
+    r2 := this.convertToExpr(expr2)
+    r3 := this.convertToExpr(expr3)
+    return this.makeFunc(SF_CASE_THEN_ELSE, expr1, r2, r3)
+}
+
+// create alias for expression
+func (this *ExprFactory) FieldAlias(expr Expr,
+    alias string) *TokenFieldAlias {
+    efa := &TokenFieldAlias{Expr: expr, Alias: alias}
+    return efa
+}
+
+func (this *ExprFactory) TableAlias(query Query,
+    alias string) *TokenTableAlias {
+    eta := &TokenTableAlias{DataSource: query, Alias: alias}
+    return eta
+}
+
+// sql custom function
+
+func (this *ExprFactory) FuncDialectDef(dialect Dialect, template string,
+    minParams, maxParams int) *CustomDialectFuncDef {
+    fnc := NewCustomDialectFunc(dialect, template, minParams,
+        maxParams)
+    return fnc
+}
+
+func (this *ExprFactory) FuncDef(funcs ...*CustomDialectFuncDef) *CustomFuncDef {
+    fnc := NewCustomFunc(funcs...)
+    return fnc
+}
+
+func (this *ExprFactory) Func(fnc *CustomFuncDef, args ...interface{}) *TokenFunc {
+    // convert slice of interface{} to Expr
+    args2 := make([]Expr, len(args))
+    for i, item := range args {
+        args2[i] = this.convertToExpr(item)
+    }
+    exp := &TokenFunc{Args: args2, Func: SF_CUSTOMFUNC, CustomFunc: fnc}
+    return exp
+}
+
+// =========================================
+//      sql dialect specific functions
+// =========================================
+
+func (this *ExprFactory) TrimSpace(expr Expr) *TokenFunc {
+    return this.makeFunc(SF_TRIMSPACE, expr)
+}
+
+func (this *ExprFactory) TrimSpaceRight(expr Expr) *TokenFunc {
+    return this.makeFunc(SF_RTRIMSPACE, expr)
+}
+
+func (this *ExprFactory) TrimSpaceLeft(expr Expr) *TokenFunc {
+    return this.makeFunc(SF_LTRIMSPACE, expr)
+}
+
+func (this *ExprFactory) CurrentDate() *TokenFunc {
+    return this.makeFunc(SF_CURDATE)
+}
+
+func (this *ExprFactory) CurrentTime() *TokenFunc {
+    return this.makeFunc(SF_CURTIME)
+}
+
+func (this *ExprFactory) CurrentDateTime() *TokenFunc {
+    return this.makeFunc(SF_CURDATETIME)
+}
+
+// new functions
+
+func (this *ExprFactory) Table(name string) *TableDef {
+    t := &TableDef{Name: name}
+    return t
+}
+
+func (this *ExprFactory) Select(fields ...Expr) *SelectRoot {
+    sel := NewSelectRoot(fields...)
+    return sel
+}
+
+func (this *ExprFactory) Insert(table Query, fields ...*TokenField) *InsertRoot {
+    ins := NewInsertRoot(table, fields...)
+    return ins
+}
+
+func (this *ExprFactory) Update(table Query, firstField *TokenFieldSet,
+    restFields ...*TokenFieldSet) *UpdateRoot {
+    fields := []*TokenFieldSet{firstField}
+    fields = append(fields, restFields...)
+    upd := NewUpdateRoot(table, fields...)
+    return upd
+}
+
+func (this *ExprFactory) Delete(table Query) *DeleteRoot {
+    del := NewDeleteRoot(table)
+    return del
+}
+
+func (this *ExprFactory) CreateDatabase(databaseName string) *CreateDatabaseRoot {
+    create := NewCreateDatabaseRoot(databaseName)
+    return create
+}
+
+func (this *ExprFactory) CreateTable(table *TableDef) *CreateTableRoot {
+    create := NewCreateTableRoot(table)
+    return create
+}
+
+func (this *ExprFactory) DropDatabase(databaseName string) *DropDatabaseRoot {
+    drop := NewDropDatabaseRoot(databaseName)
+    return drop
+}
+
+func (this *ExprFactory) DropTable(table *TableDef) *DropTableRoot {
+    r := NewDropTableRoot(table)
+    return r
+}
