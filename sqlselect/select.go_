@@ -1,0 +1,14 @@
+package sel
+
+// TODO what about Having clause
+// Generate sql statement according to general SELECT syntax:
+//      select expr1, expr2, ...
+//      from table1
+//      [(inner|left|right) join table2 on conditions]
+//      [where conditions]
+//      [group by expr1, expr2, ...]
+//      [order by expr1, expr2, ...]
+
+import (
+	"bytes"
+)

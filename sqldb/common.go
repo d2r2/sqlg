@@ -1,7 +1,8 @@
-package sqlg
+package sqldb
 
 import (
 	"fmt"
+
 	"github.com/d2r2/sqlg/logger"
 )
 
@@ -10,5 +11,5 @@ var e = fmt.Errorf
 var log = logger.NewLogger(
 	//    VL_DEBUG,
 	logger.VL_INFO,
-	"sqlg",
+	"sqldrop",
 	true)

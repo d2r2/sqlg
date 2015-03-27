@@ -1,14 +1,17 @@
 package main
 
 import (
-	_ "code.google.com/p/odbc"
 	"database/sql"
+
+	_ "code.google.com/p/odbc"
 	//    _ "github.com/mattn/go-sqlite3"
 	"fmt"
-	"github.com/d2r2/sqlg"
-	_ "github.com/mxk/go-sqlite/sqlite3"
 	"log"
 	"time"
+
+	"github.com/d2r2/sqlg/sqlcore"
+	"github.com/d2r2/sqlg/sqldef"
+	_ "github.com/mxk/go-sqlite/sqlite3"
 )
 
 type DbConnSpec struct {
@@ -52,7 +55,7 @@ func getSqliteConnSettings(conn *DbConnSpec) (string, string) {
 	return driverName, dataSource
 }
 
-func openConnection(dialect sqlg.Dialect, dbname *string) (*sql.DB, error) {
+func openConnection(dialect sqldef.Dialect, dbname *string) (*sql.DB, error) {
 	var driverName, dataSource string
 	switch dialect {
 	case sqlg.DI_PGSQL:
@@ -75,7 +78,7 @@ func openConnection(dialect sqlg.Dialect, dbname *string) (*sql.DB, error) {
 	return conn, err
 }
 
-func createDatabase(db *sql.DB, dbName string, format *sqlg.Format) error {
+func createDatabase(db *sql.DB, dbName string, format *sqlcore.Format) error {
 	batch, err := sqlg.Predefined.CheckIfDatabaseExists(
 		format.Dialect, dbName)
 	if err != nil {
@@ -107,7 +110,7 @@ func createDatabase(db *sql.DB, dbName string, format *sqlg.Format) error {
 
 func constructTables() map[string]*sqlg.TableDef {
 	tables := make(map[string]*sqlg.TableDef)
-	ef := sqlg.NewExprFactory()
+	ef := sqlcore.NewExprFactory()
 	// build table
 	name := "Customers"
 	custs := ef.Table(name)

@@ -1,4 +1,4 @@
-package sqlg
+package sqlinsert
 
 import (
 	"fmt"
@@ -10,5 +10,5 @@ var e = fmt.Errorf
 var log = logger.NewLogger(
 	//    VL_DEBUG,
 	logger.VL_INFO,
-	"sqlg",
+	"sqlinsert",
 	true)
