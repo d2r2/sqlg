@@ -2,6 +2,7 @@ package sqlcore
 
 import (
 	"fmt"
+
 	"github.com/d2r2/sqlg/logger"
 )
 
