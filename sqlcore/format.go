@@ -181,7 +181,7 @@ func (this *Format) FormatDataSourceRef(query Query) (
 	if aliasBased {
 		query = queryAlias.GetSource()
 	}
-	sqlValid, sqlValidOk := query.(SqlComplete)
+	sqlValid, sqlValidOk := query.(SqlReady)
 	if sqlValidOk {
 		this.IncIndentLevel()
 		batch, err := sqlValid.GetSql(this)

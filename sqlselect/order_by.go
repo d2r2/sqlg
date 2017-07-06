@@ -6,7 +6,7 @@ import (
 )
 
 type OrderBy interface {
-	sqlcore.SqlComplete
+	sqlcore.SqlReady
 	sqlcore.SqlPart
 }
 

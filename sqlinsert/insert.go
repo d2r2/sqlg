@@ -27,7 +27,7 @@ import (
 type Insert interface {
 	sqlcore.SqlPart
 	Values(first sqlexp.Expr, last ...sqlexp.Expr) Values
-	From(sel sqlcore.SqlComplete) From
+	From(sel sqlcore.SqlReady) From
 }
 
 type ins struct {
@@ -55,7 +55,7 @@ func (this *ins) Values(first sqlexp.Expr, last ...sqlexp.Expr) Values {
 	return iv
 }
 
-func (this *ins) From(sel sqlcore.SqlComplete) From {
+func (this *ins) From(sel sqlcore.SqlReady) From {
 	is := &from{Root: this, From: sel}
 	return is
 }

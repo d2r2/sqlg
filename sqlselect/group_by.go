@@ -6,7 +6,7 @@ import (
 )
 
 type GroupBy interface {
-	sqlcore.SqlComplete
+	sqlcore.SqlReady
 	sqlcore.SqlPart
 	OrderBy(first sqlexp.Expr, rest ...sqlexp.Expr) OrderBy
 }

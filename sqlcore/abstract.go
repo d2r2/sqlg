@@ -31,7 +31,7 @@ type QueryAlias interface {
 	GetAlias() string
 }
 
-type SqlComplete interface {
+type SqlReady interface {
 	GetSql(format *Format) (sql *StatementBatch, err error)
 }
 

@@ -6,7 +6,7 @@ import (
 )
 
 type Where interface {
-	sqlcore.SqlComplete
+	sqlcore.SqlReady
 	sqlcore.SqlPart
 }
 

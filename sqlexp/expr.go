@@ -172,7 +172,7 @@ func FormatPrettyDataSource(query sqlcore.Query,
 	capital bool, dialect *sqldef.Dialect) (string, error) {
 	var str string
 	tableBased, table := query.IsTableBased()
-	sqlValid, sqlValidOk := query.(sqlcore.SqlComplete)
+	sqlValid, sqlValidOk := query.(sqlcore.SqlReady)
 	if tableBased {
 		var buf bytes.Buffer
 		for i, field := range table.GetFields() {

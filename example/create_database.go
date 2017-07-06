@@ -1,19 +1,13 @@
 package main
 
 import (
-	"database/sql"
-
 	_ "code.google.com/p/odbc"
 	//    _ "github.com/mattn/go-sqlite3"
-	"fmt"
-	"log"
-	"time"
 
-	"github.com/d2r2/sqlg/sqlcore"
-	"github.com/d2r2/sqlg/sqldef"
 	_ "github.com/mxk/go-sqlite/sqlite3"
 )
 
+/*
 type DbConnSpec struct {
 	Server   string
 	Port     int
@@ -114,7 +108,7 @@ func constructTables() map[string]*sqlg.TableDef {
 	// build table
 	name := "Customers"
 	custs := ef.Table(name)
-	/*fldId := */ custs.Fields.AddAutoinc("Id")
+	custs.Fields.AddAutoinc("Id")
 	custs.Fields.AddUnicodeVariable("FirstName", 50).NotNull()
 	custs.Fields.AddUnicodeVariable("LastName", 50).NotNull()
 	custs.Fields.AddDate("BirthDate").NotNull().
@@ -126,7 +120,7 @@ func constructTables() map[string]*sqlg.TableDef {
 	tables[name] = custs
 	name = "Products"
 	prods := ef.Table(name)
-	/*fldId = */ prods.Fields.AddAutoinc("Id")
+	prods.Fields.AddAutoinc("Id")
 	prods.Fields.AddUnicodeVariable("Descr", 100).NotNull()
 	//    prods.Fields.AddNumeric("Price", false, 18, 2)
 	prods.Fields.AddReal("Price").NotNull().DefaultValue(0)
@@ -135,7 +129,7 @@ func constructTables() map[string]*sqlg.TableDef {
 	tables[name] = prods
 	name = "Orders"
 	ords := ef.Table(name)
-	/*fldId = */ ords.Fields.AddAutoinc("Id")
+	ords.Fields.AddAutoinc("Id")
 	ords.Fields.AddDate("OrderDate").NotNull()
 	ords.Fields.AddInt("CustId").NotNull()
 	ords.Fields.AddUnicodeVariable("Descr", 100)
@@ -143,7 +137,7 @@ func constructTables() map[string]*sqlg.TableDef {
 	tables[name] = ords
 	name = "OrderDetails"
 	dtls := ef.Table("OrderDetails")
-	/*fldId := */ dtls.Fields.AddAutoinc("Id")
+	dtls.Fields.AddAutoinc("Id")
 	dtls.Fields.AddInt("OrderId").NotNull()
 	dtls.Fields.AddUnicodeVariable("ItemName", 50).NotNull()
 	dtls.Fields.AddInt("Quantity").NotNull()
@@ -151,7 +145,7 @@ func constructTables() map[string]*sqlg.TableDef {
 	tables[name] = dtls
 	return tables
 }
-
+*/
 /*
 func getTables(dbDef *sqlg.DatabaseDef) (*sqlg.TableDef,
     *sqlg.TableDef, *sqlg.TableDef, *sqlg.TableDef, error) {
@@ -174,6 +168,7 @@ func getTables(dbDef *sqlg.DatabaseDef) (*sqlg.TableDef,
     return custs, prods, ords, dtls, nil
 }
 */
+/*
 func dropTables(db *sql.DB, format *sqlg.Format,
 	tables ...*sqlg.TableDef) error {
 	ef := sqlg.NewExprFactory()
@@ -212,9 +207,9 @@ func insertCustomers(db *sql.DB, format *sqlg.Format,
 	// fill Customers
 	i1 := ef.Insert(custs,
 		ef.Field(custs, "FirstName"),
-		ef.Field(custs, "LastName") /*,ef.Field(custs, "ReferenceDate")*/).
+		ef.Field(custs, "LastName") ).
 		Values(ef.Value(firstName),
-		ef.Value(lastName) /*ef.CurrentDateTime()*/).
+			ef.Value(lastName)).
 		Returning(ef.Field(custs, "Id"))
 	batch, err := i1.GetSql(format)
 	row, err := batch.ExecQueryRow(db)
@@ -303,7 +298,7 @@ func createAndFillDatabase(dialect sqlg.Dialect) error {
 	var db *sql.DB
 	var err error
 	format := sqlg.NewFormat(dialect)
-	format.AddOptions( /*SBO_USE_DATABASE_NAME|*/
+	format.AddOptions(
 		sqlg.BO_USE_SCHEMA_NAME | sqlg.BO_DO_IF_OBJECT_EXISTS_NOT_EXISTS)
 	dbName := "Test123"
 	tables := constructTables()
@@ -330,14 +325,14 @@ func createAndFillDatabase(dialect sqlg.Dialect) error {
 	custs, prods, ords, dtls, err := getTables(dbDef)
 	if err != nil {
 		return err
-	}
-	/*sql, args, err := dbDef.CreateDatabase().GetSql(format)
-	  log.Info(sql)
-	  log.Info(args)
-	  _, err = db.Exec(sql, args...)
-	  if err != nil {
-	      t.Fatal(err)
-	  }*/
+	}*/
+/*sql, args, err := dbDef.CreateDatabase().GetSql(format)
+  log.Info(sql)
+  log.Info(args)
+  _, err = db.Exec(sql, args...)
+  if err != nil {
+      t.Fatal(err)
+  }*/ /*
 	err = dropTables(db, format, custs, prods, ords, dtls)
 	if err != nil {
 		return err
@@ -363,3 +358,4 @@ func main() {
 		log.Fatal(err)
 	}
 }
+*/

@@ -106,7 +106,7 @@ func (this *createDatabaseMaker) GetExprBuildContext(partKind sqlcore.SqlPartKin
 }
 
 type CreateDatabase interface {
-	sqlcore.SqlComplete
+	sqlcore.SqlReady
 	sqlcore.SqlPart
 }
 
@@ -200,7 +200,7 @@ func (this *createTableMaker) GetExprBuildContext(partKind sqlcore.SqlPartKind,
 }
 
 type CreateTable interface {
-	sqlcore.SqlComplete
+	sqlcore.SqlReady
 	sqlcore.SqlPart
 }
 

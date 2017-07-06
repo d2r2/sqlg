@@ -7,7 +7,7 @@ import (
 )
 
 type Returning interface {
-	sqlcore.SqlComplete
+	sqlcore.SqlReady
 	sqlcore.SqlPart
 }
 

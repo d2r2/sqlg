@@ -5,7 +5,7 @@ import (
 )
 
 type From interface {
-	sqlcore.SqlComplete
+	sqlcore.SqlReady
 	sqlcore.SqlPart
 }
 
@@ -14,7 +14,7 @@ type from struct {
 	Root *ins
 	// data
 	// TODO change SqlComplete with Subquery???
-	From sqlcore.SqlComplete
+	From sqlcore.SqlReady
 }
 
 func (this *from) buildSelectSectionSql(maker *maker,

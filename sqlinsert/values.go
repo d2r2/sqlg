@@ -6,7 +6,7 @@ import (
 )
 
 type Values interface {
-	sqlcore.SqlComplete
+	sqlcore.SqlReady
 	sqlcore.SqlPart
 	Returning(first sqlexp.Expr, rest ...sqlexp.Expr) *returning
 }

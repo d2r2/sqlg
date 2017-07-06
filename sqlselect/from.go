@@ -6,7 +6,7 @@ import (
 )
 
 type From interface {
-	sqlcore.SqlComplete
+	sqlcore.SqlReady
 	sqlcore.SqlPart
 	InnerJoin(query sqlcore.Query, joinCond sqlexp.Expr) From
 	LeftJoin(query sqlcore.Query, joinCond sqlexp.Expr) From

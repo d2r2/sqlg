@@ -120,7 +120,7 @@ func (this *UtilStatements) CheckStatIfTableExists(
 		tbl1 := sqldb.Table("pg_class")
 		tbl2 := sqldb.Table("pg_namespace")
 		schemaName := dialect.GetDefaultSchema()
-		var s sqlcore.SqlComplete
+		var s sqlcore.SqlReady
 		if schemaName == nil {
 			s = Select(ef.Count(ef.Field(tbl1, "relname"))).
 				From(ef.TableAlias(tbl1, "a")).

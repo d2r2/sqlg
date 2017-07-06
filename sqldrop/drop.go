@@ -104,7 +104,7 @@ func (this *dropDatabaseMaker) GetExprBuildContext(sectionKind sqlcore.SqlPartKi
 }
 
 type DropDatabase interface {
-	sqlcore.SqlComplete
+	sqlcore.SqlReady
 	sqlcore.SqlPart
 }
 
@@ -207,7 +207,7 @@ func (this *dropTableMaker) GetExprBuildContext(sectionKind sqlcore.SqlPartKind,
 }
 
 type DropTable interface {
-	sqlcore.SqlComplete
+	sqlcore.SqlReady
 	sqlcore.SqlPart
 }
 
